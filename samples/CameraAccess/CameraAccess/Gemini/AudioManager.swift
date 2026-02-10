@@ -14,6 +14,7 @@ class AudioManager {
   private let sendQueue = DispatchQueue(label: "audio.accumulator")
   private var accumulatedData = Data()
   private let minSendBytes = 3200  // 100ms at 16kHz mono Int16 = 1600 frames * 2 bytes
+  private let maxAccumulatedBytes = 64000  // ~2s cap to prevent unbounded growth
 
   init() {
     self.outputFormat = AVAudioFormat(
@@ -115,6 +116,11 @@ class AudioManager {
       // Accumulate into ~100ms chunks before sending to Gemini
       self.sendQueue.async {
         self.accumulatedData.append(pcmData)
+        // drop oldest data if buffer grows too large (prevents memory exhaustion)
+        if self.accumulatedData.count > self.maxAccumulatedBytes {
+          let excess = self.accumulatedData.count - self.maxAccumulatedBytes
+          self.accumulatedData.removeFirst(excess)
+        }
         if self.accumulatedData.count >= self.minSendBytes {
           let chunk = self.accumulatedData
           self.accumulatedData = Data()

@@ -46,6 +46,12 @@ class GeminiLiveService: ObservableObject {
       return false
     }
 
+    // enforce wss:// protocol
+    guard url.scheme?.lowercased() == "wss" else {
+      connectionState = .error("Insecure WebSocket connection rejected — use wss://")
+      return false
+    }
+
     connectionState = .connecting
 
     let result = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
@@ -62,18 +68,17 @@ class GeminiLiveService: ObservableObject {
 
       self.delegate.onClose = { [weak self] code, reason in
         guard let self else { return }
-        let reasonStr = reason.flatMap { String(data: $0, encoding: .utf8) } ?? "no reason"
         Task { @MainActor in
           self.resolveConnect(success: false)
           self.connectionState = .disconnected
           self.isModelSpeaking = false
-          self.onDisconnected?("Connection closed (code \(code.rawValue): \(reasonStr))")
+          self.onDisconnected?("Connection closed (code \(code.rawValue))")
         }
       }
 
       self.delegate.onError = { [weak self] error in
         guard let self else { return }
-        let msg = error?.localizedDescription ?? "Unknown error"
+        let msg = error != nil ? "Connection error" : "Unknown error"
         Task { @MainActor in
           self.resolveConnect(success: false)
           self.connectionState = .error(msg)
@@ -117,6 +122,8 @@ class GeminiLiveService: ObservableObject {
 
   func sendAudio(data: Data) {
     guard connectionState == .ready else { return }
+    // enforce payload size limit
+    guard data.count <= GeminiConfig.maxAudioPayloadBytes else { return }
     sendQueue.async { [weak self] in
       let base64 = data.base64EncodedString()
       let json: [String: Any] = [
@@ -135,6 +142,8 @@ class GeminiLiveService: ObservableObject {
     guard connectionState == .ready else { return }
     sendQueue.async { [weak self] in
       guard let jpegData = image.jpegData(compressionQuality: GeminiConfig.videoJPEGQuality) else { return }
+      // enforce payload size limit
+      guard jpegData.count <= GeminiConfig.maxVideoPayloadBytes else { return }
       let base64 = jpegData.base64EncodedString()
       let json: [String: Any] = [
         "realtimeInput": [
@@ -228,12 +237,11 @@ class GeminiLiveService: ObservableObject {
           }
         } catch {
           if !Task.isCancelled {
-            let reason = error.localizedDescription
             await MainActor.run {
               self.resolveConnect(success: false)
               self.connectionState = .disconnected
               self.isModelSpeaking = false
-              self.onDisconnected?(reason)
+              self.onDisconnected?("Connection lost")
             }
           }
           break
@@ -265,16 +273,14 @@ class GeminiLiveService: ObservableObject {
       return
     }
 
-    // Tool call from model (top-level message, not inside serverContent)
+    // Tool call from model
     if let toolCall = GeminiToolCall(json: json) {
-      NSLog("[Gemini] Tool call received: %d function(s)", toolCall.functionCalls.count)
       onToolCall?(toolCall)
       return
     }
 
-    // Tool call cancellation (user interrupted during tool execution)
+    // Tool call cancellation
     if let cancellation = GeminiToolCallCancellation(json: json) {
-      NSLog("[Gemini] Tool call cancellation: %@", cancellation.ids.joined(separator: ", "))
       onToolCallCancellation?(cancellation)
       return
     }
@@ -297,16 +303,13 @@ class GeminiLiveService: ObservableObject {
              let audioData = Data(base64Encoded: base64Data) {
             if !isModelSpeaking {
               isModelSpeaking = true
-              // Log latency: time from end of user speech to first audio response
               if let speechEnd = lastUserSpeechEnd, !responseLatencyLogged {
                 let latency = Date().timeIntervalSince(speechEnd)
-                NSLog("[Latency] %.0fms (user speech end -> first audio)", latency * 1000)
+                NSLog("[Latency] %.0fms", latency * 1000)
                 responseLatencyLogged = true
               }
             }
             onAudioReceived?(audioData)
-          } else if let text = part["text"] as? String {
-            NSLog("[Gemini] %@", text)
           }
         }
       }
@@ -319,14 +322,12 @@ class GeminiLiveService: ObservableObject {
 
       if let inputTranscription = serverContent["inputTranscription"] as? [String: Any],
          let text = inputTranscription["text"] as? String, !text.isEmpty {
-        NSLog("[Gemini] You: %@", text)
         lastUserSpeechEnd = Date()
         responseLatencyLogged = false
         onInputTranscription?(text)
       }
       if let outputTranscription = serverContent["outputTranscription"] as? [String: Any],
          let text = outputTranscription["text"] as? String, !text.isEmpty {
-        NSLog("[Gemini] AI: %@", text)
         onOutputTranscription?(text)
       }
     }

@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 enum GeminiConfig {
   static let websocketBaseURL = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
@@ -11,6 +12,10 @@ enum GeminiConfig {
 
   static let videoFrameInterval: TimeInterval = 1.0
   static let videoJPEGQuality: CGFloat = 0.5
+
+  // max payload size for video frames (2MB) and audio chunks (64KB)
+  static let maxVideoPayloadBytes = 2 * 1024 * 1024
+  static let maxAudioPayloadBytes = 64 * 1024
 
   static let systemInstruction = """
     You are an AI assistant for someone wearing Meta Ray-Ban smart glasses. You can see through their camera and have a voice conversation. Keep responses concise and natural.
@@ -40,35 +45,104 @@ enum GeminiConfig {
     For messages, confirm recipient and content before delegating unless clearly urgent.
     """
 
-  // ---------------------------------------------------------------
-  // REQUIRED: Add your own Gemini API key here.
-  // Get one at https://aistudio.google.com/apikey
-  // ---------------------------------------------------------------
-  static let apiKey = "YOUR_GEMINI_API_KEY"
+  // MARK: - Keychain-based credential storage
 
-  // ---------------------------------------------------------------
-  // OPTIONAL: OpenClaw gateway config (for agentic tool-calling).
-  // Only needed if you want Gemini to perform actions (web search,
-  // send messages, delegate tasks) via an OpenClaw gateway on your Mac.
-  // See README.md for setup instructions.
-  // ---------------------------------------------------------------
-  static let openClawHost = "http://YOUR_MAC_HOSTNAME.local"
+  // Keys used to store/retrieve secrets from the iOS Keychain.
+  // On first launch, the app should prompt the user to enter these values,
+  // which are then stored securely. See KeychainHelper below.
+  private static let keychainServicePrefix = "com.visionclaw"
+
+  static var apiKey: String {
+    KeychainHelper.read(service: "\(keychainServicePrefix).gemini", account: "apiKey") ?? ""
+  }
+
+  static var openClawHost: String {
+    KeychainHelper.read(service: "\(keychainServicePrefix).openclaw", account: "host") ?? ""
+  }
+
   static let openClawPort = 18789
-  static let openClawHookToken = "YOUR_OPENCLAW_HOOK_TOKEN"
-  static let openClawGatewayToken = "YOUR_OPENCLAW_GATEWAY_TOKEN"
+
+  static var openClawHookToken: String {
+    KeychainHelper.read(service: "\(keychainServicePrefix).openclaw", account: "hookToken") ?? ""
+  }
+
+  static var openClawGatewayToken: String {
+    KeychainHelper.read(service: "\(keychainServicePrefix).openclaw", account: "gatewayToken") ?? ""
+  }
+
+  // MARK: - Save credentials (call from a setup UI)
+
+  static func saveGeminiApiKey(_ key: String) {
+    KeychainHelper.save(service: "\(keychainServicePrefix).gemini", account: "apiKey", value: key)
+  }
+
+  static func saveOpenClawCredentials(host: String, gatewayToken: String, hookToken: String) {
+    KeychainHelper.save(service: "\(keychainServicePrefix).openclaw", account: "host", value: host)
+    KeychainHelper.save(service: "\(keychainServicePrefix).openclaw", account: "gatewayToken", value: gatewayToken)
+    KeychainHelper.save(service: "\(keychainServicePrefix).openclaw", account: "hookToken", value: hookToken)
+  }
+
+  // MARK: - URL builders
 
   static func websocketURL() -> URL? {
-    guard apiKey != "YOUR_GEMINI_API_KEY" && !apiKey.isEmpty else { return nil }
+    guard isConfigured else { return nil }
     return URL(string: "\(websocketBaseURL)?key=\(apiKey)")
   }
 
   static var isConfigured: Bool {
-    return apiKey != "YOUR_GEMINI_API_KEY" && !apiKey.isEmpty
+    return !apiKey.isEmpty
   }
 
   static var isOpenClawConfigured: Bool {
-    return openClawGatewayToken != "YOUR_OPENCLAW_GATEWAY_TOKEN"
-      && !openClawGatewayToken.isEmpty
-      && openClawHost != "http://YOUR_MAC_HOSTNAME.local"
+    return !openClawGatewayToken.isEmpty && !openClawHost.isEmpty
+  }
+}
+
+// MARK: - Keychain Helper
+
+enum KeychainHelper {
+  static func save(service: String, account: String, value: String) {
+    guard let data = value.data(using: .utf8) else { return }
+
+    // delete existing item first
+    let deleteQuery: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account
+    ]
+    SecItemDelete(deleteQuery as CFDictionary)
+
+    let addQuery: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account,
+      kSecValueData as String: data,
+      kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+    ]
+    SecItemAdd(addQuery as CFDictionary, nil)
+  }
+
+  static func read(service: String, account: String) -> String? {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account,
+      kSecReturnData as String: true,
+      kSecMatchLimit as String: kSecMatchLimitOne
+    ]
+
+    var result: AnyObject?
+    let status = SecItemCopyMatching(query as CFDictionary, &result)
+    guard status == errSecSuccess, let data = result as? Data else { return nil }
+    return String(data: data, encoding: .utf8)
+  }
+
+  static func delete(service: String, account: String) {
+    let query: [String: Any] = [
+      kSecClass as String: kSecClassGenericPassword,
+      kSecAttrService as String: service,
+      kSecAttrAccount as String: account
+    ]
+    SecItemDelete(query as CFDictionary)
   }
 }

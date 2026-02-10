@@ -9,19 +9,18 @@ class OpenClawBridge: ObservableObject {
 
   init() {
     let config = URLSessionConfiguration.default
-    config.timeoutIntervalForRequest = 120
+    config.timeoutIntervalForRequest = 60
     self.session = URLSession(configuration: config)
     self.sessionKey = OpenClawBridge.newSessionKey()
   }
 
   func resetSession() {
     sessionKey = OpenClawBridge.newSessionKey()
-    NSLog("[OpenClaw] New session: %@", sessionKey)
   }
 
+  // cryptographically random session key instead of predictable timestamp
   private static func newSessionKey() -> String {
-    let ts = ISO8601DateFormatter().string(from: Date())
-    return "agent:main:glass:\(ts)"
+    return "agent:main:glass:\(UUID().uuidString)"
   }
 
   // MARK: - Agent Chat (session continuity via x-openclaw-session-key header)
@@ -32,7 +31,17 @@ class OpenClawBridge: ObservableObject {
   ) async -> ToolResult {
     lastToolCallStatus = .executing(toolName)
 
-    guard let url = URL(string: "\(GeminiConfig.openClawHost):\(GeminiConfig.openClawPort)/v1/chat/completions") else {
+    guard GeminiConfig.isOpenClawConfigured else {
+      lastToolCallStatus = .failed(toolName, "OpenClaw not configured")
+      return .failure("OpenClaw gateway not configured")
+    }
+
+    let hostString = "\(GeminiConfig.openClawHost):\(GeminiConfig.openClawPort)/v1/chat/completions"
+
+    // validate url scheme is http or https only
+    guard let url = URL(string: hostString),
+          let scheme = url.scheme,
+          ["http", "https"].contains(scheme.lowercased()) else {
       lastToolCallStatus = .failed(toolName, "Invalid URL")
       return .failure("Invalid gateway URL")
     }
@@ -58,8 +67,6 @@ class OpenClawBridge: ObservableObject {
 
       guard let statusCode = httpResponse?.statusCode, (200...299).contains(statusCode) else {
         let code = httpResponse?.statusCode ?? 0
-        let bodyStr = String(data: data, encoding: .utf8) ?? "no body"
-        NSLog("[OpenClaw] Chat failed: HTTP %d - %@", code, String(bodyStr.prefix(200)))
         lastToolCallStatus = .failed(toolName, "HTTP \(code)")
         return .failure("Agent returned HTTP \(code)")
       }
@@ -69,19 +76,16 @@ class OpenClawBridge: ObservableObject {
          let first = choices.first,
          let message = first["message"] as? [String: Any],
          let content = message["content"] as? String {
-        NSLog("[OpenClaw] Agent result: %@", String(content.prefix(200)))
         lastToolCallStatus = .completed(toolName)
         return .success(content)
       }
 
       let raw = String(data: data, encoding: .utf8) ?? "OK"
-      NSLog("[OpenClaw] Agent raw: %@", String(raw.prefix(200)))
       lastToolCallStatus = .completed(toolName)
       return .success(raw)
     } catch {
-      NSLog("[OpenClaw] Agent error: %@", error.localizedDescription)
-      lastToolCallStatus = .failed(toolName, error.localizedDescription)
-      return .failure("Agent error: \(error.localizedDescription)")
+      lastToolCallStatus = .failed(toolName, "Connection error")
+      return .failure("Agent connection error")
     }
   }
 }

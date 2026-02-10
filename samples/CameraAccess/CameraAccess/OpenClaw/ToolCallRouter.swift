@@ -5,6 +5,11 @@ class ToolCallRouter {
   private let bridge: OpenClawBridge
   private var inFlightTasks: [String: Task<Void, Never>] = [:]
 
+  // only tools declared in ToolDeclarations are allowed
+  private static let allowedToolNames: Set<String> = Set(
+    ToolDeclarations.allDeclarations().compactMap { $0["name"] as? String }
+  )
+
   init(bridge: OpenClawBridge) {
     self.bridge = bridge
   }
@@ -18,20 +23,27 @@ class ToolCallRouter {
     let callId = call.id
     let callName = call.name
 
-    NSLog("[ToolCall] Received: %@ (id: %@) args: %@",
-          callName, callId, String(describing: call.args))
+    // reject tool calls not in the whitelist
+    guard Self.allowedToolNames.contains(callName) else {
+      NSLog("[ToolCall] Rejected unknown tool: %@", callName)
+      let response = buildToolResponse(
+        callId: callId,
+        name: callName,
+        result: .failure("Unknown tool: \(callName)")
+      )
+      sendResponse(response)
+      return
+    }
 
     let task = Task { @MainActor in
       let taskDesc = call.args["task"] as? String ?? String(describing: call.args)
-      let result = await bridge.delegateTask(task: taskDesc, toolName: callName)
 
-      guard !Task.isCancelled else {
-        NSLog("[ToolCall] Task %@ was cancelled, skipping response", callId)
-        return
-      }
+      // enforce a max length on task descriptions to limit abuse
+      let sanitizedTask = String(taskDesc.prefix(4096))
 
-      NSLog("[ToolCall] Result for %@ (id: %@): %@",
-            callName, callId, String(describing: result))
+      let result = await bridge.delegateTask(task: sanitizedTask, toolName: callName)
+
+      guard !Task.isCancelled else { return }
 
       let response = self.buildToolResponse(callId: callId, name: callName, result: result)
       sendResponse(response)
@@ -46,7 +58,6 @@ class ToolCallRouter {
   func cancelToolCalls(ids: [String]) {
     for id in ids {
       if let task = inFlightTasks[id] {
-        NSLog("[ToolCall] Cancelling in-flight call: %@", id)
         task.cancel()
         inFlightTasks.removeValue(forKey: id)
       }
@@ -56,8 +67,7 @@ class ToolCallRouter {
 
   /// Cancel all in-flight tool calls (on session stop)
   func cancelAll() {
-    for (id, task) in inFlightTasks {
-      NSLog("[ToolCall] Cancelling in-flight call: %@", id)
+    for (_, task) in inFlightTasks {
       task.cancel()
     }
     inFlightTasks.removeAll()

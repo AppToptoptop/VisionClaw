@@ -10,8 +10,9 @@ enum GeminiConfig {
   static let audioChannels: UInt32 = 1
   static let audioBitsPerSample: UInt32 = 16
 
-  static let videoFrameInterval: TimeInterval = 1.0
-  static let videoJPEGQuality: CGFloat = 0.5
+  // lower quality + longer interval = less data = less lag
+  static let videoFrameInterval: TimeInterval = 1.5
+  static let videoJPEGQuality: CGFloat = 0.3
 
   // max payload size for video frames (2MB) and audio chunks (64KB)
   static let maxVideoPayloadBytes = 2 * 1024 * 1024

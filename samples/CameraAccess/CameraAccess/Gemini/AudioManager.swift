@@ -13,8 +13,8 @@ class AudioManager {
   // Accumulate resampled PCM into ~100ms chunks before sending
   private let sendQueue = DispatchQueue(label: "audio.accumulator")
   private var accumulatedData = Data()
-  private let minSendBytes = 3200  // 100ms at 16kHz mono Int16 = 1600 frames * 2 bytes
-  private let maxAccumulatedBytes = 64000  // ~2s cap to prevent unbounded growth
+  private let minSendBytes = 1600  // 50ms chunks — faster audio delivery, lower latency
+  private let maxAccumulatedBytes = 32000  // ~1s cap to prevent unbounded growth
 
   init() {
     self.outputFormat = AVAudioFormat(

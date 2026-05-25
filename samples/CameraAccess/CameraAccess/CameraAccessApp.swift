@@ -33,19 +33,8 @@ struct CameraAccessApp: App {
   @StateObject private var wearablesViewModel: WearablesViewModel
 
   init() {
-    // save Gemini API key to Keychain on first launch
-    if !GeminiConfig.isConfigured {
-      GeminiConfig.saveGeminiApiKey("AIzaSyB_StxXBdY9nONtSd-IYCsW7eiNZkKEXxc")
-    }
-
-    // configure OpenClaw gateway credentials
-    if !GeminiConfig.isOpenClawConfigured {
-      GeminiConfig.saveOpenClawCredentials(
-        host: "http://Mac-Aaron-2.local",
-        gatewayToken: "9df32f3e487909e279b737d2979a05fc6b882b241944d102",
-        hookToken: "9df32f3e487909e279b737d2979a05fc6b882b241944d102"
-      )
-    }
+    // Configure Gemini and OpenClaw credentials via setup UI or a local-only debug file.
+    // Never commit real API keys or gateway tokens in the sample app source.
 
     do {
       try Wearables.configure()

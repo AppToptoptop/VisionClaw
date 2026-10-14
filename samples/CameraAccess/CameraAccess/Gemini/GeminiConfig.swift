@@ -54,7 +54,13 @@ enum GeminiConfig {
   private static let keychainServicePrefix = "com.visionclaw"
 
   static var apiKey: String {
-    KeychainHelper.read(service: "\(keychainServicePrefix).gemini", account: "apiKey") ?? ""
+    #if DEBUG
+    // Use hardcoded key from Secrets.swift in development
+    return Secrets.geminiApiKey
+    #else
+    // Use Keychain in production
+    return KeychainHelper.read(service: "\(keychainServicePrefix).gemini", account: "apiKey") ?? ""
+    #endif
   }
 
   static var openClawHost: String {
